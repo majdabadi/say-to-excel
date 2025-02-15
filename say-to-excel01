@@ -1,0 +1,511 @@
+import tkinter as tk  # Importing the Tkinter module for creating the GUI
+from tkinter import filedialog, ttk, messagebox  # Importing specific widgets and modules from Tkinter
+import pandas as pd  # Importing the Pandas library for data manipulation and reading Excel files
+import pyttsx3  # Importing the pyttsx3 library for text-to-speech functionality
+import threading  # Importing the threading module for running tasks concurrently
+import time  # Importing the time module for adding delays
+import random  # Importing the random module for random cell selection
+
+class ExcelTextToSpeechApp:
+    """
+    A GUI application for reading text from an Excel file and speaking it aloud,
+    with options for translation display, cell navigation, and speech control.
+    """
+
+    def __init__(self, root):
+        """
+        Initializes the main application window and all its components.
+
+        Args:
+            root (tk.Tk): The main Tkinter window object.
+        """
+        self.root = root  # Assigning the root window to the application
+        self.root.title("Excel Text to Speech")  # Setting the title of the window
+        self.root.geometry("800x600")  # Setting a default size for the window (width x height)
+
+        # --- Variables ---
+        self.file_path = None  # Path to the selected Excel file
+        self.sheet_name = None  # Name of the selected sheet in the Excel file
+        self.text_column_name = None  # Name of the column containing the text to be read
+        self.translation_column_name = None  # Name of the column containing the translation
+        self.df = None  # Pandas DataFrame to hold the data from the Excel file
+        self.current_index = 0  # Index of the current row being processed
+        self.paused = False  # Flag to indicate if the speech is paused
+        self.stop_speaking = False  # Flag to indicate if the speech should be stopped
+        self.engine = pyttsx3.init()  # Initializing the text-to-speech engine
+        self.speed = 150  # Default speech speed in words per minute
+        self.speaking = False  # Flag to track if speech is in progress
+        self.use_delay = True  # Flag to determine if delay is used between cells
+        self.random_speak = False  # Flag to determine if cells are spoken in random order
+        self.initial_delay_base = 0.5  # Base initial delay of 0.5 seconds
+        self.initial_delay_per_word = 0.1  # Added delay per word (0.1 seconds)
+
+        # --- Font Definition ---
+        self.large_font = ("Arial", 14)  # Defining a larger font for text boxes
+
+        # --- Widgets ---
+        # File selection
+        self.file_label = tk.Label(root, text="Select Excel File:")  # Label for the file selection
+        self.file_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.file_button = tk.Button(root, text="Browse", command=self.load_file)  # Button to open the file dialog
+        self.file_button.grid(row=0, column=1, padx=10, pady=10, sticky="w")  # Positioning the button in the grid
+
+        # Sheet selection
+        self.sheet_label = tk.Label(root, text="Select Sheet:")  # Label for the sheet selection
+        self.sheet_label.grid(row=1, column=0, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.sheet_combobox = ttk.Combobox(root, state="readonly")  # Combobox to select the sheet
+        self.sheet_combobox.grid(row=2, column=0, padx=10, pady=10, sticky="w")  # Positioning the combobox in the grid
+        self.sheet_combobox.bind("<<ComboboxSelected>>", self.load_columns)  # Binding the selection event to load columns
+
+        # Column selection
+        self.text_column_label = tk.Label(root, text="Select Text Column:")  # Label for the text column selection
+        self.text_column_label.grid(row=1, column=1, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.text_column_combobox = ttk.Combobox(root, state="readonly")  # Combobox to select the text column
+        self.text_column_combobox.grid(row=2, column=1, padx=10, pady=10, sticky="w")  # Positioning the combobox in the grid
+
+        # Translation column selection
+        self.translation_column_label = tk.Label(root, text="Select Translation Column:")  # Label for the translation column selection
+        self.translation_column_label.grid(row=1, column=2, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.translation_column_combobox = ttk.Combobox(root, state="readonly")  # Combobox to select the translation column
+        self.translation_column_combobox.grid(row=2, column=2, padx=10, pady=10, sticky="w")  # Positioning the combobox in the grid
+
+        # Initial delay control
+        self.initial_delay_label = tk.Label(root, text="Base Initial Delay (sec):")  # Label for the initial delay
+        self.initial_delay_label.grid(row=3, column=0, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.initial_delay_scale = tk.Scale(root, from_=0.0, to=5.0, resolution=0.1, orient=tk.HORIZONTAL,
+                                             command=self.set_initial_delay_base)  # Scale to set the initial delay
+        self.initial_delay_scale.set(self.initial_delay_base)  # Setting the default value for the scale
+        self.initial_delay_scale.grid(row=3, column=1, padx=10, pady=10, sticky="ew")  # Positioning the scale in the grid
+
+        # Cell navigation
+        self.cell_frame = tk.Frame(root)  # Frame to group cell label, entry and go button
+        self.cell_frame.grid(row=4, column=0, columnspan=2, padx=10, pady=10, sticky="w")  # Positioning the frame in the grid
+
+        self.cell_label = tk.Label(self.cell_frame, text="Go to Cell:")  # Label for the cell entry
+        self.cell_label.pack(side=tk.LEFT, padx=(0, 5))  # Positioning the label in the frame
+
+        self.cell_entry = tk.Entry(self.cell_frame, width=10)  # Entry to input the cell number
+        self.cell_entry.pack(side=tk.LEFT, padx=(0, 5))  # Positioning the entry in the frame
+
+        self.go_button = tk.Button(self.cell_frame, text="Go", command=self.go_to_cell)  # Button to go to the specified cell
+        self.go_button.pack(side=tk.LEFT)  # Positioning the button in the frame
+
+        # Current cell label
+        self.current_cell_label = tk.Label(root, text="Current Cell: - ")  # Label to display the current cell
+        self.current_cell_label.grid(row=4, column=1, columnspan=2, padx=10, pady=5, sticky="w")  # Positioning the label in the grid
+
+        # Start, Pause, Resume, End buttons
+        self.start_button = tk.Button(root, text="Start", command=self.start_speech)  # Button to start the speech
+        self.start_button.grid(row=5, column=0, padx=10, pady=10, sticky="w")  # Positioning the button in the grid
+
+        self.pause_button = tk.Button(root, text="Pause", command=self.pause_speech,
+                                        state=tk.DISABLED)  # Button to pause the speech
+        self.pause_button.grid(row=5, column=1, padx=10, pady=10, sticky="w")  # Positioning the button in the grid
+
+        self.resume_button = tk.Button(root, text="Resume", command=self.resume_speech,
+                                         state=tk.DISABLED)  # Button to resume the speech
+        self.resume_button.grid(row=5, column=2, padx=10, pady=10, sticky="w")  # Positioning the button in the grid
+
+        self.end_button = tk.Button(root, text="End", command=self.end_speech,
+                                      state=tk.DISABLED)  # Button to end the speech
+        self.end_button.grid(row=5, column=3, padx=10, pady=10, sticky="w")  # Positioning the button in the grid
+
+        # Speed control
+        self.speed_label = tk.Label(root, text="Speech Speed (WPM):")  # Label for the speech speed
+        self.speed_label.grid(row=6, column=0, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.speed_scale = tk.Scale(root, from_=50, to=300, orient=tk.HORIZONTAL,
+                                     command=self.set_speed)  # Scale to set the speech speed
+        self.speed_scale.set(self.speed)  # Setting the default value for the scale
+        self.speed_scale.grid(row=6, column=1, padx=10, pady=10, sticky="ew")  # Positioning the scale in the grid
+
+        # Delay between cells (auto-calculated)
+        self.delay_label = tk.Label(root, text="Auto Delay (based on speech duration):")  # Label for the auto delay
+        self.delay_label.grid(row=7, column=0, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.delay_entry = tk.Entry(root)  # Entry to display the delay
+        self.delay_entry.insert(0, "0")  # Inserting the default value
+        self.delay_entry.grid(row=7, column=1, padx=10, pady=10, sticky="w")  # Positioning the entry in the grid
+        self.delay_entry.config(state="disabled")  # Disabling the delay entry
+
+        # Checkbox for enabling/disabling delay
+        self.delay_checkbox = tk.Checkbutton(root, text="Enable Delay",
+                                               command=self.toggle_delay)  # Checkbox to toggle the delay
+        self.delay_checkbox.grid(row=7, column=2, padx=10, pady=10, sticky="w")  # Positioning the checkbox in the grid
+        self.delay_checkbox.select()  # Default to Enabled
+        self.delay_checkbox.config(state="disabled")  # Disabling the checkbox
+
+        # Checkbox for random speaking order
+        self.random_checkbox = tk.Checkbutton(root, text="Random Order",
+                                                command=self.toggle_random)  # Checkbox to toggle random order
+        self.random_checkbox.grid(row=4, column=2, padx=10, pady=10, sticky="w")  # Positioning the checkbox in the grid
+
+        # Text boxes for displaying current and translation text
+        self.translation_text_label = tk.Label(root, text="Translation Text:")  # Label for the translation text
+        self.translation_text_label.grid(row=8, column=0, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.translation_text_box = tk.Text(root, height=3, width=40,
+                                              font=self.large_font)  # Textbox to display the translation
+        self.translation_text_box.grid(row=8, column=1, padx=10, pady=10, sticky="ew")  # Positioning the textbox in the grid
+        self.translation_text_box.bind("<Button-1>",
+                                         self.toggle_pause_resume)  # Binding the click event to toggle pause/resume
+
+        self.current_text_label = tk.Label(root, text="Current Text:")  # Label for the current text
+        self.current_text_label.grid(row=9, column=0, padx=10, pady=10, sticky="w")  # Positioning the label in the grid
+
+        self.current_text_box = tk.Text(root, height=3, width=40, font=self.large_font)  # Textbox to display the current text
+        self.current_text_box.grid(row=9, column=1, padx=10, pady=10, sticky="ew")  # Positioning the textbox in the grid
+        self.current_text_box.bind("<Button-1>",
+                                     self.toggle_pause_resume)  # Binding the click event to toggle pause/resume
+
+        # Configure grid weights to make text boxes expandable
+        root.columnconfigure(1, weight=1)  # Column 1 (where text boxes are) will expand
+        for i in range(12):  # Assuming 12 rows
+            root.grid_rowconfigure(i, weight=1)  # Configuring row weights
+
+    # --- Helper Functions ---
+    def load_file(self):
+        """
+        Opens a file dialog to select an Excel file, reads the sheet names,
+        and populates the sheet selection combobox.
+        """
+        self.file_path = filedialog.askopenfilename(
+            filetypes=[("Excel files", "*.xlsx *.xls")])  # Opening the file dialog
+        if self.file_path:  # If a file is selected
+            try:
+                self.sheet_combobox['values'] = pd.ExcelFile(self.file_path).sheet_names  # Reading the sheet names
+                if self.sheet_combobox['values']:  # If there are sheets in the file
+                    self.sheet_combobox.set(self.sheet_combobox['values'][0])  # Default to the first sheet
+                    self.load_columns(None)  # Trigger loading of columns
+                else:
+                    messagebox.showinfo("Info", "The selected Excel file contains no sheets.")  # Showing an info message
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load Excel file: {e}")  # Showing an error message
+
+    def load_columns(self, event):
+        """
+        Loads the columns from the selected sheet into the column selection comboboxes.
+
+        Args:
+            event: The event that triggered this function (e.g., sheet selection).
+        """
+        self.sheet_name = self.sheet_combobox.get()  # Getting the selected sheet name
+        try:
+            self.df = pd.read_excel(self.file_path, sheet_name=self.sheet_name)  # Reading the Excel sheet into a DataFrame
+            columns = self.df.columns.tolist()  # Getting the list of columns
+            self.text_column_combobox['values'] = columns  # Setting the column values for the text combobox
+            self.translation_column_combobox['values'] = columns  # Setting the column values for the translation combobox
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load sheet: {e}")  # Showing an error message
+
+    def go_to_cell(self):
+        """
+        Navigates to a specific cell in the Excel sheet based on user input.
+        """
+        cell_ref = self.cell_entry.get().upper()  # Getting the cell reference from the entry and converting to uppercase
+        try:
+            # Convert Excel cell notation to DataFrame index
+            row_index = int(''.join(filter(str.isdigit, cell_ref))) - 1  # Extract row number
+            if row_index < 0 or row_index >= len(self.df):  # Validating the row index
+                raise ValueError("Row index out of bounds")  # Raising a ValueError if out of bounds
+            self.current_index = row_index  # Setting the current index
+            self.update_current_cell_label()  # Updating the current cell label
+            # Display text from the cell
+            self.display_current_text()  # Displaying the current text
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid cell reference: {e}")  # Showing an error message
+        except Exception as e:
+            messagebox.showerror("Error", f"Error navigating to cell: {e}")  # Showing an error message
+
+    def display_current_text(self):
+        """
+        Displays the current text and its translation in the respective text boxes.
+        It first shows the translation, then schedules the current text to appear
+        after a delay.
+        """
+        if self.df is None or self.df.empty or not self.text_column_combobox.get() or not self.translation_column_combobox.get():
+            return  # If DataFrame is empty or columns are not selected, exit the function
+        try:
+            current_text = str(self.df.iloc[self.current_index][
+                                   self.text_column_combobox.get()])  # Getting the current text from the DataFrame
+            translation_text = str(self.df.iloc[self.current_index][
+                                       self.translation_column_combobox.get()])  # Getting the translation text from the DataFrame
+
+            # First, display the translation
+            self.translation_text_box.delete(1.0, tk.END)  # Clearing the translation text box
+            self.translation_text_box.insert(tk.END, translation_text)  # Inserting the translation text
+
+            # Calculate the initial delay based on the number of words in current_text
+            num_words = len(current_text.split())  # Calculating the number of words in the current text
+            initial_delay = self.initial_delay_base + (
+                        num_words * self.initial_delay_per_word)  # Calculating the initial delay
+
+            # Then, schedule the display of the current text after the calculated initial delay
+            self.root.after(int(initial_delay * 1000), self.display_current_text_delayed,
+                            current_text)  # Scheduling the display of the current text
+        except KeyError:
+            messagebox.showerror("Error", "Selected column not found in DataFrame.")  # Showing an error message
+        except IndexError:
+            messagebox.showerror("Error", "End of sheet reached.")  # Showing an error message
+        except Exception as e:
+            messagebox.showerror("Error", f"Error displaying text: {e}")  # Showing an error message
+
+    def display_current_text_delayed(self, current_text):
+        """
+        Displays the current text in the text box after a delay and then speaks the text.
+
+        Args:
+            current_text (str): The text to be displayed and spoken.
+        """
+        self.current_text_box.delete(1.0, tk.END)  # Clearing the current text box
+        self.current_text_box.insert(tk.END, current_text)  # Inserting the current text
+        self.update_current_cell_label()  # Updating the cell label
+
+        # Speak the text after display
+        self.speak_text(current_text)  # Speaking the text
+
+    def update_current_cell_label(self):
+        """
+        Updates the current cell label to display the current index in Excel notation.
+        """
+        try:
+            # Convert the zero-based index to a one-based row number
+            row_number = self.current_index + 1  # Adding 1 to the current index
+
+            # Determine the column letter(s)
+            column_letter = self.column_index_to_letters(0)  # Get first column letter
+
+            self.current_cell_label.config(
+                text=f"Current Cell: {column_letter}{row_number}")  # Configuring the current cell label
+        except Exception as e:
+            messagebox.showerror("Error", f"Error updating current cell label: {e}")  # Showing an error message
+
+    def column_index_to_letters(self, column_index):
+        """
+        Convert a zero-based column index to Excel-style column letters.
+
+        Args:
+            column_index (int): The zero-based column index.
+
+        Returns:
+            str: The Excel-style column letters.
+        """
+        letters = ''  # Initializing the letters
+        while column_index >= 0:  # Looping until the column index is non-negative
+            modulo = column_index % 26  # Getting the modulo
+            letters = chr(65 + modulo) + letters  # 65 is the ASCII code for 'A'
+            column_index = (column_index // 26) - 1  # Integer division
+        return letters  # Returning the letters
+
+    # --- Speech Functions ---
+    def start_speech(self):
+        """
+        Starts the speech process, reading the selected cells from the Excel file.
+        """
+        if not self.speaking:  # If speech is not already in progress
+            if self.df is None or self.df.empty:  # If the DataFrame is empty
+                messagebox.showerror("Error",
+                                     "Please load an Excel file and select a sheet and columns first.")  # Showing an error message
+                return  # Exiting the function
+
+            self.speaking = True  # Setting the speaking flag to True
+            self.paused = False  # Setting the paused flag to False
+            self.stop_speaking = False  # Setting the stop_speaking flag to False
+
+            # Start from the specified row number if given, otherwise start from the top
+            if self.cell_entry.get():  # If a cell entry is given
+                self.go_to_cell()  # Going to the specified cell
+
+            self.speak_thread = threading.Thread(target=self.speak_next)  # Creating a thread for the speech
+            self.speak_thread.start()  # Starting the thread
+
+            self.update_buttons(started=True)  # Updating the buttons
+
+    def pause_speech(self):
+        """
+        Pauses the speech process.
+        """
+        self.paused = True  # Setting the paused flag to True
+        self.update_buttons(paused=True)  # Updating the buttons
+
+    def resume_speech(self):
+        """
+        Resumes the speech process.
+        """
+        self.paused = False  # Setting the paused flag to False
+        self.update_buttons(resumed=True)  # Updating the buttons
+        self.speak_next()  # Calling the speak_next function
+
+    def end_speech(self):
+        """
+        Stops the speech process.
+        """
+        self.speaking = False  # Setting the speaking flag to False
+        self.paused = False  # Setting the paused flag to False
+        self.stop_speaking = True  # Setting the stop_speaking flag to True
+
+        if self.speak_thread and self.speak_thread.is_alive():  # If the speech thread is alive
+            self.speak_thread.join()  # Wait for the thread to finish
+
+        self.update_buttons(stopped=True)  # Updating the buttons
+
+    def set_speed(self, speed):
+        """
+        Sets the speech speed.
+
+        Args:
+            speed (int): The speech speed in words per minute.
+        """
+        self.speed = int(speed)  # Converting the speed to integer
+        self.engine.setProperty('rate', self.speed)  # Setting the speech rate
+
+    def toggle_delay(self):
+        """
+        Toggles the use of delay between cells.
+        """
+        self.use_delay = not self.use_delay  # Toggling the use_delay flag
+
+    def toggle_random(self):
+        """
+        Toggles random speaking order.
+        """
+        self.random_speak = not self.random_speak  # Toggling the random_speak flag
+
+    def set_initial_delay_base(self, delay):
+        """
+        Sets the base initial delay before speaking.
+
+        Args:
+            delay (float): The base initial delay in seconds.
+        """
+        self.initial_delay_base = float(delay)  # Setting the initial delay base
+
+    def calculate_speech_duration(self, text):
+        """
+        Calculates the approximate duration of speech in seconds.
+
+        Args:
+            text (str): The text to be spoken.
+
+        Returns:
+            float: The approximate duration of speech in seconds.
+        """
+        words = text.split()  # Splitting the text into words
+        word_count = len(words)  # Getting the number of words
+
+        # Duration = (word_count / speed) * 60 (since speed is in WPM)
+        duration = (word_count / self.speed) * 60  # Calculating the duration
+        return duration  # Returning the duration
+
+    def speak_next(self):
+        """
+        Speaks the next cell in the selected column.
+        If random_speak is enabled, it picks a random cell.
+        Otherwise, it moves to the next cell in sequence.
+        """
+        if not self.speaking or self.paused or self.stop_speaking:  # If not speaking, paused, or stopped
+            self.update_buttons(stopped=True)  # Reset the buttons
+            return  # Exit the function
+
+        if self.random_speak:  # If random speak is enabled
+            self.current_index = random.randint(0, len(self.df) - 1)  # Get a random index
+        else:  # If random speak is not enabled
+            if self.current_index >= len(self.df):  # If the current index is out of bounds
+                messagebox.showinfo("Info", "End of sheet reached.")  # Show an info message
+                self.end_speech()  # Stop when the end is reached
+                return  # Exit the function
+
+        # call display the text
+        self.display_current_text()  # Displaying the current text
+
+    def speak_text(self, text):
+        """
+        Speaks the given text using the pyttsx3 engine.
+
+        Args:
+            text (str): The text to be spoken.
+        """
+        if not self.speaking or self.paused or self.stop_speaking:  # Check flags
+            self.update_buttons(stopped=True)  # Updating the buttons
+            return  # Exit the function
+
+        self.engine.setProperty('rate', self.speed)  # Setting the speech rate
+        self.engine.say(text)  # Saying the text
+        self.engine.runAndWait()  # Waiting for the speech to finish
+
+        if not self.random_speak:  # If random speak is not enabled
+            self.current_index += 1  # Increment the current index
+
+        # Immediately proceed to the next cell without delay
+        self.speak_next()  # Calling the speak_next function
+
+    def toggle_pause_resume(self, event):
+        """
+        Toggles between pause and resume on text box click.
+
+        Args:
+            event: The event that triggered this function (e.g., text box click).
+        """
+        if self.paused:  # If paused
+            self.resume_speech()  # Resume the speech
+        else:  # If not paused
+            self.pause_speech()  # Pause the speech
+
+    def update_buttons(self, started=False, paused=False, resumed=False, stopped=False):
+        """
+        Updates the state of buttons based on the current speaking status.
+
+        Args:
+            started (bool): True if speech has started.
+            paused (bool): True if speech is paused.
+            resumed (bool): True if speech has resumed.
+            stopped (bool): True if speech has stopped.
+        """
+        if started:  # If started
+            self.start_button.config(text="Speaking...", state=tk.DISABLED)  # Configuring the start button
+            self.pause_button.config(state=tk.NORMAL)  # Configuring the pause button
+            self.resume_button.config(state=tk.DISABLED)  # Configuring the resume button
+            self.end_button.config(state=tk.NORMAL)  # Configuring the end button
+        elif paused:  # If paused
+            self.start_button.config(state=tk.DISABLED)  # Configuring the start button
+            self.pause_button.config(state=tk.DISABLED)  # Configuring the pause button
+            self.resume_button.config(state=tk.NORMAL)  # Configuring the resume button
+            self.end_button.config(state=tk.NORMAL)  # Configuring the end button
+        elif resumed:  # If resumed
+            self.start_button.config(text="Speaking...", state=tk.DISABLED)  # Configuring the start button
+            self.pause_button.config(state=tk.NORMAL)  # Configuring the pause button
+            self.resume_button.config(state=tk.DISABLED)  # Configuring the resume button
+            self.end_button.config(state=tk.NORMAL)  # Configuring the end button
+        elif stopped:  # If stopped
+            self.start_button.config(text="Start", state=tk.NORMAL)  # Configuring the start button
+            self.pause_button.config(state=tk.DISABLED)  # Configuring the pause button
+            self.resume_button.config(state=tk.DISABLED)  # Configuring the resume button
+            self.end_button.config(state=tk.DISABLED)  # Configuring the end button
+
+    def column_index_to_letters(self, column_index):
+        """
+        Convert a zero-based column index to Excel-style column letters.
+
+        Args:
+            column_index (int): The zero-based column index.
+
+        Returns:
+            str: The Excel-style column letters.
+        """
+        letters = ''  # Initializing the letters
+        while column_index >= 0:  # Looping until the column index is non-negative
+            modulo = column_index % 26  # Getting the modulo
+            letters = chr(65 + modulo) + letters  # 65 is the ASCII code for 'A'
+            column_index = (column_index // 26) - 1  # Integer division
+        return letters  # Returning the letters
+
+# --- Main ---
+if __name__ == "__main__":
+    root = tk.Tk()  # Creating the main Tkinter window
+    app = ExcelTextToSpeechApp(root)  # Creating an instance of the ExcelTextToSpeechApp class
+    root.mainloop()  # Running the Tkinter event loop
